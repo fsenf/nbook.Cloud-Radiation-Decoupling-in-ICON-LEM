@@ -1,0 +1,384 @@
+#=============================================================================
+#
+# This section of the run script containes the specifications of the experiment.
+# The specifications are passed by namelist to the program.
+# For a complete list see Namelist_overview.pdf
+#
+# EXPNAME and NPROMA must be defined in as environment variables or must 
+# they must be substituted with appropriate values.
+#
+# DWD, 2010-08-31
+#
+#-----------------------------------------------------------------------------
+#
+# Basic specifications of the simulation
+# --------------------------------------
+#
+# These variables are set in the header section of the completed run script:
+#
+# EXPNAME = experiment name
+# NPROMA  = array blocking length / inner loop length
+#-----------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+# The following values must be set here as shell variables so that they can be used
+# also in the executing section of the completed run script
+#
+#-----------------------------------------------------------------------------
+# the namelist filename
+atmo_namelist=NAMELIST_${EXPNAME}
+#
+##-----------------------------------------------------------------------------
+# global timing
+start_date="2013-05-02T00:00:00Z" 
+end_date="2013-05-02T14:00:00Z"
+##KGinit_date=2013042500
+init_date=`echo ${start_date%%:*} | sed 's/\-//g' | sed 's/T//g'`
+
+#
+#
+#ndays_restart=6
+#dt_restart=`expr ${ndays_restart} \* 86400`
+dt_restart=`expr 1 \* 86400`     # könnt ich ändern 
+restart=".true."
+#
+#
+#Dictionary file for output
+dict_file="dict.${EXPNAME}" 
+cat dict.icon.hdcp2  > ${dict_file}
+add_link_file ${basedir}/run/${dict_file}     ./
+#
+#add other required files
+DATADIR=${basedir}/data
+add_link_file ${DATADIR}/rrtmg_lw.nc           ./
+add_link_file ${DATADIR}/ECHAM6_CldOptProps.nc ./
+add_link_file ${DATADIR}/dmin_wetgrowth_lookup.nc ./   #for inwp_gscp==4
+#
+
+ECCRADDATA = ${basedir}/externals/ecrad/data
+
+
+#
+#-----------------------------------------------------------------------------
+# model timing
+dtime=3
+dt_checkpoint=`expr 10800 `  # write restart file every 3h 
+#
+#-----------------------------------------------------------------------------
+checkpoint_interval="PT10800S" 
+restart_interval="P1D"
+# 
+# model parameters
+atmo_model_equations=3 # equation system
+#                     1=hydrost. atm. (T dynamics)
+#                     2=hydrost. atm. (theta dynamics)
+#                     3=non-hydrost. atm.,
+#                    -1=shallow water model
+#                    -2=hydrost. ocean
+iforcing=3        # 3 for inwp forcing; 0 for no forcing
+nlev=150
+#
+#-----------------------------------------------------------------------------
+# the grid and other files
+
+# the grid parameters
+# grid_1="hdcp2_cologne_55km_0624m" #TODO
+grid_1="xsdom1"
+
+grids_folder="/work/bb1174/data/icon-lem/grids-extpar/${grid_1}" #Ändern
+atmo_dyn_grids="${grid_1}.nc"
+dynamics_parent_grid_id="0"
+#
+
+# absolute path to directory with LAM data
+LAMDATA="/work/bb1174/data/icon-lem/bc-init/${grid_1}" # hier auch 
+
+# BC
+LATBC_PATH=${LAMDATA}/
+
+#
+#EXT DATA
+ext_data_path=${grids_folder}
+add_link_file $ext_data_path/icon_extpar_${grid_1}.nc  extpar_${grid_1}.nc
+
+#INITIAL DATA
+init_data_path=$LAMDATA
+add_link_file $init_data_path/init_${grid_1}_${init_date}.nc ifs2icon_R2B12_DOM01.nc
+add_link_file $init_data_path/init_${grid_1}_${init_date}.nc dwdFG_R2B12_DOM01.nc
+#
+#-----------------------------------------------------------------------------
+#
+# write ICON namelist parameters
+# ------------------------
+# For a complete list see Namelist_overview and Namelist_overview.pdf
+#
+# ------------------------
+# reconstrcuct the grid parameters in namelist form
+dynamics_grid_filename=""
+for gridfile in ${atmo_dyn_grids}; do
+  dynamics_grid_filename="${dynamics_grid_filename} '${gridfile}',"
+done
+dynamics_parent_grid_id="${dynamics_parent_grid_id},"
+#
+cat > ${atmo_namelist} << EOF
+!
+&parallel_nml
+ nproma         = ${nproma}
+ p_test_run     = .false.
+ l_test_openmp  = .false.
+ l_log_checks   = .false.
+ num_io_procs   = 1 
+ io_proc_chunk_size = 26
+ num_prefetch_proc = 1
+ num_restart_procs = 1
+/
+&grid_nml
+ ! cell_type is not used = 3            ! triangular cells
+ dynamics_grid_filename = ${dynamics_grid_filename}
+ dynamics_parent_grid_id = ${dynamics_parent_grid_id}
+ lfeedback         = .false.
+ l_limited_area    = .true.
+ start_time        = 0., 60.
+/ 
+&initicon_nml
+ init_mode              =  4 !4=cosmo, 2=ifs, 3=combined
+ nlevsoil_in            =  4
+ lread_ana              = .false.
+/
+&run_nml
+ num_lev     = ${nlev}      !number of full levels of vertical grid
+ lvert_nest = .false.
+ dtime       = ${dtime}     ! [s] timestep in seconds
+ ldynamics   = .TRUE.       ! dynamics
+ ltestcase   = .FALSE.      ! testcase
+ ltransport  = .TRUE.       ! transport
+ iforcing    = ${iforcing}  !
+ ltimer      = .true.       ! 
+ timers_level = 10          !
+ check_uuid_gracefully = .TRUE.
+ msg_level   = 2           ! detailed report during integration
+ output      = 'nml','totint'      
+/
+&dynamics_nml
+ iequations  = ${atmo_model_equations}       ! 1: hydrost. atmosphere
+ lcoriolis   = .TRUE.
+ idiv_method     = 1
+ divavg_cntrwgt  = 0.50
+/
+&transport_nml
+ lclip_tracer = .FALSE.
+/
+&limarea_nml
+itype_latbc     = 1
+dtime_latbc     = 3600.
+latbc_path      = '${LATBC_PATH}'
+latbc_boundary_grid    =  '${grids_folder}/bc-grid-${grid_1}.grid.nc'
+latbc_filename  = 'latbc_${grid_1}_<y><m><d><h>.nc'
+latbc_varnames_map_file = '$basedir/run/dict.latbc'
+/
+&diffusion_nml
+ hdiff_order      = 5 
+ hdiff_smag_fac   = 0.01
+ lhdiff_vn        = .TRUE.
+ lhdiff_temp      = .TRUE.
+ lhdiff_w         = .TRUE.
+/
+&nwp_phy_nml
+ inwp_gscp       = 2 !4 for two moment
+ inwp_convection = 0
+ inwp_radiation  = 4 ! 1 for rrtm, 4 for ecrad
+ inwp_cldcover   = 5
+ inwp_turb       = 5
+ inwp_satad      = 1
+ inwp_surface    = 1
+ latm_above_top  = .true.
+ efdt_min_raylfric = 7200.
+ itype_z0         = 2
+ dt_rad           = 120.
+/
+&les_nml
+ smag_constant     = 0.23
+ isrfc_type        = 1  !1=TERRA,2=Fixed flux, 5=fixed SST, 3=fixed bflux
+ vert_scheme_type  = 2
+ ldiag_les_out     = .FALSE.
+ les_metric        = .TRUE.
+/
+&lnd_nml
+ ntiles   = 1
+ nlev_snow = 2
+ lmulti_snow = .true.
+ idiag_snowfrac = 1
+ lsnowtile = .false.
+ frlnd_thrhld = 0.5
+ frlake_thrhld = 0.5
+ frsea_thrhld = 0.5
+ lseaice   = .false.
+ llake     = .false.
+ itype_lndtbl   =  2
+/
+&radiation_nml
+ irad_o3 = 7
+ irad_aero = 6
+ ecrad_data_path ='${basedir}/externals/ecrad/data'
+ aerosol_absorption_weight = 1.0
+ aerosol_scattering_weight = 1.0
+/
+&interpol_nml
+ nudge_zone_width  = 8  !-1 create nudge zone in grid
+ lsq_high_ord      = 2
+ rbf_vec_scale_c   = 0.03
+ rbf_vec_scale_v   = 0.07
+ rbf_vec_scale_e   = 0.15
+ rbf_scale_mode_ll = 1 !2=default for automatic calculations
+/
+&gridref_nml
+ grf_intmethod_e  = 5  !6 default
+ grf_scalfbk      = 1
+ grf_tracfbk      = 1
+ denom_diffu_v    = 150.
+ l_mass_consvcorr = .true. 
+ l_density_nudging = .true.
+/
+&nonhydrostatic_nml
+ iadv_rhotheta    =  2
+ ivctype          =  2
+ itime_scheme     =  4
+ exner_expol      =  0.333
+ vwind_offctr     =  0.25
+ damp_height      =  15000.
+ rayleigh_coeff   =  0.25
+ lhdiff_rcf       = .true.
+ divdamp_fac      =  0.004
+ divdamp_order    =  4
+ l_open_ubc       = .true.
+ igradp_method    =  3
+ l_zdiffu_t       = .true.
+ thslp_zdiffu     =  0.02
+ thhgtd_zdiffu    =  125.
+ htop_moist_proc  =  22500.
+ hbot_qvsubstep   =  24000.
+/
+&sleve_nml
+ min_lay_thckn   = 20.
+ top_height      = 21000.
+ stretch_fac     = 0.9
+ decay_scale_1   = 4000.
+ decay_scale_2   = 2500.
+ decay_exp       = 1.2
+ flat_height     = 16000. 
+/
+&io_nml
+ dt_checkpoint    = ${dt_checkpoint} ! [s] trigger new restart file
+ lkeep_in_sync    = .true.
+ restart_write_mode = "async"
+ restart_file_type = 5
+ output_nml_dict  = "${dict_file}"
+ netcdf_dict      = "${dict_file}"
+/
+&time_nml
+ dt_restart   = ${dt_restart} 
+/
+&meteogram_output_nml
+ lmeteogram_enabled= .FALSE.
+ n0_mtgrm          = 0             ! meteogram initial time step (0 is first step!)
+ ninc_mtgrm        = 3       ! meteogram output interval (steps)
+ ldistributed      = .false.
+ stationlist_tot   =  50.909,   6.414, 'c1',             ! Lat,Lon
+/ 
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT01H"
+ file_interval    = "PT01H"
+ include_last     = .FALSE.
+ output_filename  = '3d_full_qmix'
+ remap            = 0
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'qc','qi','qr','qs','qg'
+ reg_lon_def      = 4.5,0.017,14.5
+ reg_lat_def      = 47.5,0.011,54.5
+ filetype         = 5
+ dom              = 1 
+/
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT01H"
+ file_interval    = "PT01H"
+ include_last     = .FALSE.
+ output_filename  = '3d_full_base'
+ remap            = 0
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'u','v','w','clc','qv','temp','pres'
+ reg_lon_def      = 4.5,0.017,14.5
+ reg_lat_def      = 47.5,0.011,54.5
+ filetype         = 5
+ dom              = 1
+/
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT01H"
+ file_interval    = "PT01H"
+ include_last     = .FALSE.
+ output_filename  = '3d_full_aux'
+ remap            = 0
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'tkvh','ddt_temp_radlw','ddt_temp_radsw'
+ reg_lon_def      = 4.5,0.017,14.5
+ reg_lat_def      = 47.5,0.011,54.5
+ filetype         = 5
+ dom              = 1
+/
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT05M"
+ file_interval    = "PT01H"
+ include_last     = .TRUE.
+ output_filename  = '2d_cloud'
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'tqv_dia','tqc_dia','tqi_dia','clct','z_pbl','rain_gsp_rate','ice_gsp_rate',
+                    'snow_gsp_rate','graupel_gsp_rate','hbas_con','htop_con',
+                    'p_ctop','t_ctop','p_cbase','t_cbase','clch','clcm','clcl','htop_dc'
+ filetype         = 5
+ dom              = 1
+/
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT05M"
+ file_interval    = "PT01H"
+ include_last     = .TRUE.
+ output_filename  = '2d_rad'
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'asob_s','asodird_s','asodifd_s','athb_s','athd_s','asob_t','asod_t','athb_t',
+                    'albdif','albvisdif','albvisdir','albnirdif','albnirdir', 
+                    'sob_t','sod_t','sob_s','sou_s'
+ filetype         = 5
+ dom              = 1
+/
+&output_nml
+ output_start     = "${start_date}"
+ output_end       = "${end_date}"
+ output_interval  = "PT05M"
+ file_interval    = "PT01H"
+ include_last     = .TRUE.
+ output_filename  = '2d_surface'
+ filename_format  = "<output_filename>_DOM<physdom>_<levtype>_<datetime2>"
+ ml_varlist       = 'lhfl_s','shfl_s','umfl_s','vmfl_s','t_g','pres_sfc','qv_s','t_2m','qv_2m',
+                    'rh_2m','u_10m','v_10m','w_so','t_so','runoff_s','t_s','t_seasfc'
+                    'tcm','tch'
+ filetype         = 5
+ dom              = 1 
+/
+&extpar_nml
+ itopo          = 1
+ n_iter_smooth_topo = 1
+ heightdiff_threshold = 1000.
+/
+EOF
+#
+#----------------------------------------------------------------------------------------------------------
+
+
